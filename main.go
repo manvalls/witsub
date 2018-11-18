@@ -93,6 +93,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								return
 							}
 
+							nw.Write([]byte(id))
+							nw.Write([]byte{'\n'})
 							rerr := wit.NewJSONRenderer(delta).Render(nw)
 							if rerr != nil {
 								if h.Error != nil {
