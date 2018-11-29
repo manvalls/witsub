@@ -21,7 +21,7 @@ type Request struct {
 
 // Handler handles incoming websockets
 type Handler struct {
-	Handler func(ch chan<- wit.Delta, req Request)
+	Handler func(ch chan<- wit.Action, req Request)
 	Error   func(error)
 	websocket.Upgrader
 }
@@ -72,11 +72,11 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				ctx, cancel := context.WithCancel(rootCtx)
 				cancels[id] = cancel
 
-				ch := make(chan wit.Delta)
+				ch := make(chan wit.Action)
 				go func() {
 					for {
 						select {
-						case delta, ok := <-ch:
+						case action, ok := <-ch:
 							if !ok {
 								return
 							}
@@ -95,7 +95,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 							nw.Write([]byte(id))
 							nw.Write([]byte{'\n'})
-							rerr := wit.NewJSONRenderer(delta).Render(nw)
+							rerr := wit.NewJSONRenderer(action).Render(nw)
 							if rerr != nil {
 								if h.Error != nil {
 									h.Error(rerr)
