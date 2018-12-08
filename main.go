@@ -11,18 +11,21 @@ import (
 	"github.com/manvalls/wit"
 )
 
-// Request contains the requested parameters
-type Request struct {
+// Connection represents an incoming connection
+type Connection struct {
 	url.Values
 	context.Context
+	Out chan<- wit.Action
+	In  <-chan url.Values
 
 	fakeReq *http.Request
 }
 
 // Handler handles incoming websockets
 type Handler struct {
-	Handler func(ch chan<- wit.Action, req Request)
-	Error   func(error)
+	Handler  func(conn Connection)
+	Error    func(error)
+	InBuffer int
 	websocket.Upgrader
 }
 
@@ -40,7 +43,42 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer rootCancel()
 
 	mutex := sync.Mutex{}
+	mapsLock := sync.Mutex{}
 	cancels := make(map[string]context.CancelFunc)
+	inChannels := make(map[string]chan url.Values, h.InBuffer)
+
+	cleanup := func(id string) {
+		mapsLock.Lock()
+		defer mapsLock.Unlock()
+
+		cancel, ok := cancels[id]
+		if ok {
+			cancel()
+			delete(cancels, id)
+		}
+
+		chIn, ok := inChannels[id]
+		if ok {
+			close(chIn)
+			delete(inChannels, id)
+		}
+	}
+
+	defer func() {
+		mapsLock.Lock()
+		defer mapsLock.Unlock()
+
+		for _, cancel := range cancels {
+			cancel()
+		}
+
+		for _, chIn := range inChannels {
+			close(chIn)
+		}
+
+		cancels = nil
+		inChannels = nil
+	}()
 
 	for {
 		_, p, err := conn.ReadMessage()
@@ -56,11 +94,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		if l == 1 || l == 3 {
 			id := parts[0]
-			cancel, ok := cancels[id]
-			if ok {
-				delete(cancels, id)
-				cancel()
-			}
+			cleanup(id)
 
 			if l == 3 {
 				params, _ := url.ParseQuery(parts[1])
@@ -70,13 +104,20 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				fakeReq := &http.Request{Header: cookiesHeader}
 
 				ctx, cancel := context.WithCancel(rootCtx)
-				cancels[id] = cancel
+				chOut := make(chan wit.Action)
+				chIn := make(chan url.Values)
 
-				ch := make(chan wit.Action)
+				mapsLock.Lock()
+				cancels[id] = cancel
+				inChannels[id] = chIn
+				mapsLock.Unlock()
+
 				go func() {
+					defer cleanup(id)
+
 					for {
 						select {
-						case action, ok := <-ch:
+						case action, ok := <-chOut:
 							if !ok {
 								return
 							}
@@ -96,6 +137,8 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 							nw.Write([]byte(id))
 							nw.Write([]byte{'\n'})
 							rerr := wit.NewJSONRenderer(action).Render(nw)
+							nw.Close()
+
 							if rerr != nil {
 								if h.Error != nil {
 									h.Error(rerr)
@@ -113,8 +156,26 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					}
 				}()
 
-				go h.Handler(ch, Request{params, ctx, fakeReq})
+				go func() {
+					h.Handler(Connection{params, ctx, chOut, chIn, fakeReq})
+					cleanup(id)
+				}()
 			}
+		} else if l == 2 {
+			id := parts[0]
+			go func() {
+				mapsLock.Lock()
+				defer mapsLock.Unlock()
+
+				chIn, ok := inChannels[id]
+				if ok {
+					params, _ := url.ParseQuery(parts[1])
+					select {
+					case chIn <- params:
+					default:
+					}
+				}
+			}()
 		}
 	}
 }
