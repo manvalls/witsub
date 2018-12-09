@@ -55,6 +55,14 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			cancel()
 			delete(cancels, id)
+
+			mutex.Lock()
+			defer mutex.Unlock()
+
+			werr := conn.WriteMessage(websocket.TextMessage, []byte(id))
+			if werr != nil && h.Error != nil {
+				h.Error(werr)
+			}
 		}
 
 		chIn, ok := inChannels[id]
