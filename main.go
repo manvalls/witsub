@@ -15,7 +15,7 @@ import (
 type Connection struct {
 	url.Values
 	context.Context
-	Out chan<- wit.Action
+	Out chan<- wit.Command
 	In  <-chan url.Values
 
 	fakeReq *http.Request
@@ -112,7 +112,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				fakeReq := &http.Request{Header: cookiesHeader}
 
 				ctx, cancel := context.WithCancel(rootCtx)
-				chOut := make(chan wit.Action)
+				chOut := make(chan wit.Command)
 				chIn := make(chan url.Values)
 
 				mapsLock.Lock()
@@ -125,7 +125,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 					for {
 						select {
-						case action, ok := <-chOut:
+						case command, ok := <-chOut:
 							if !ok {
 								return
 							}
@@ -144,7 +144,7 @@ func (h Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 							nw.Write([]byte(id))
 							nw.Write([]byte{'\n'})
-							rerr := wit.NewJSONRenderer(action).Render(nw)
+							rerr := wit.NewJSONRenderer(command).Render(nw)
 							nw.Close()
 
 							if rerr != nil {
